@@ -1,0 +1,10 @@
+venv/
+myenv/
+__pycache__/
+*.py[cod]
+
+Banana Ripeness Classification Dataset/
+Banana_Leaf_Dataset/
+My-Test/
+
+.streamlit/secrets.toml

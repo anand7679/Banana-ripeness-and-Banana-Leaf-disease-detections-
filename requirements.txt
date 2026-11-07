@@ -1,0 +1,12 @@
+torch>=1.12
+torchvision
+timm
+numpy
+pandas
+scikit-learn
+matplotlib
+opencv-python
+albumentations
+tensorboard
+streamlit
+transformers
