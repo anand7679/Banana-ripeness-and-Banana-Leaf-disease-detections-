@@ -1,214 +1,13 @@
-# import sys
-# import tempfile
-# from pathlib import Path
-
-# import streamlit as st
-# from PIL import Image
-
-# PROJECT_DIR = Path(__file__).resolve().parent
-# SRC_DIR = PROJECT_DIR / "src"
-# sys.path.insert(0, str(SRC_DIR))
-
-# from predict import predict as predict_ripeness
-# from banana_leaf_disease.predict import predict as predict_leaf_disease
-
-
-# RIPENESS_CHECKPOINT = PROJECT_DIR / "checkpoints" / "best_vit.pth"
-# LEAF_DISEASE_CHECKPOINT = (
-#     PROJECT_DIR / "checkpoints" / "banana_leaf_disease_vit.pth"
-# )
-
-# st.set_page_config(page_title="Banana Image Classifier", layout="wide")
-# st.title("Banana Image Classifier")
-# st.write(
-#     "Upload a banana image to check both its ripeness and possible leaf disease."
-# )
-
-# uploaded_file = st.file_uploader(
-#     "Choose an image",
-#     type=["jpg", "jpeg", "png"],
-# )
-
-# if uploaded_file is not None:
-#     image = Image.open(uploaded_file).convert("RGB")
-#     st.image(image, caption="Uploaded image", use_container_width=True)
-
-#     with tempfile.NamedTemporaryFile(
-#         suffix=".jpg", prefix="banana_classifier_", delete=False
-#     ) as temporary_file:
-#         temporary_image = Path(temporary_file.name)
-#         image.save(temporary_file, format="JPEG")
-
-#     try:
-#         ripeness_tab, disease_tab = st.tabs(
-#             ["Banana ripeness", "Banana leaf disease"]
-#         )
-
-#         with ripeness_tab:
-#             st.subheader("Ripeness result")
-#             if not RIPENESS_CHECKPOINT.exists():
-#                 st.error(f"Ripeness checkpoint not found: {RIPENESS_CHECKPOINT}")
-#             else:
-#                 result = predict_ripeness(
-#                     str(temporary_image),
-#                     checkpoint=str(RIPENESS_CHECKPOINT),
-#                 )
-#                 confidence = float(result["confidence"]) * 100
-#                 if result["label"] == "BestToEat":
-#                     st.success(f"Best to eat ({confidence:.2f}% confidence)")
-#                 else:
-#                     st.warning(
-#                         f"Not best to eat ({confidence:.2f}% confidence)"
-#                     )
-
-#         with disease_tab:
-#             st.subheader("Leaf disease result")
-#             if not LEAF_DISEASE_CHECKPOINT.exists():
-#                 st.info(
-#                     "Leaf disease model is not trained yet. "
-#                     f"Expected checkpoint: {LEAF_DISEASE_CHECKPOINT}"
-#                 )
-#             else:
-#                 result = predict_leaf_disease(
-#                     str(temporary_image),
-#                     checkpoint_path=str(LEAF_DISEASE_CHECKPOINT),
-#                 )
-#                 disease = str(result["label"]).capitalize()
-#                 confidence = float(result["confidence"]) * 100
-#                 if disease.lower() == "healthy":
-#                     st.success(
-#                         f"Healthy leaf ({confidence:.2f}% confidence)"
-#                     )
-#                 else:
-#                     st.warning(
-#                         f"Possible {disease} disease "
-#                         f"({confidence:.2f}% confidence)"
-#                     )
-#     finally:
-#         temporary_image.unlink(missing_ok=True)
-
-
-# import sys
-# import tempfile
-# import importlib.util
-# from pathlib import Path
-
-# import pandas as pd
-# import streamlit as st
-# from PIL import Image
-
-# PROJECT_DIR = Path(__file__).resolve().parent
-# sys.path.insert(0, str(PROJECT_DIR / "src_Banana_ripeness"))
-
-# ripeness_module_spec = importlib.util.spec_from_file_location(
-#     "banana_ripeness_predict",
-#     PROJECT_DIR / "src_Banana_ripeness" / "predict.py",
-# )
-# if ripeness_module_spec is None or ripeness_module_spec.loader is None:
-#     raise ImportError("Could not load the banana ripeness prediction module.")
-# ripeness_module = importlib.util.module_from_spec(ripeness_module_spec)
-# ripeness_module_spec.loader.exec_module(ripeness_module)
-# predict_ripeness = ripeness_module.predict
-# from banana_leaf_disease.predict import predict as predict_leaf_disease
-
-# RIPENESS_CHECKPOINT = PROJECT_DIR / "checkpoints" / "best_vit.pth"
-# LEAF_CHECKPOINT = PROJECT_DIR / "checkpoints" / "banana_leaf_disease_vit.pth"
-
-# st.set_page_config(page_title="Banana Image Classifier", layout="wide")
-# st.title("AI Banana Health Assistant")
-# st.caption(
-#     "Upload a banana fruit or leaf image. The trained vision model will "
-#     "estimate the class and show how confident it is."
-# )
-
-# mode = st.radio("What are you uploading?", ["Banana fruit", "Banana leaf"], horizontal=True)
-# uploaded_file = st.file_uploader("Choose an image", type=["jpg", "jpeg", "png"])
-
-# def show_prediction(result, mode_name):
-#     label = str(result["label"]).replace("_", " ").title()
-#     confidence = float(result["confidence"]) * 100
-#     raw_probabilities = result.get("probabilities")
-#     if raw_probabilities is None:
-#         raw_probabilities = {str(result["label"]): float(result["confidence"])}
-#         st.info(
-#             "This prediction did not include scores for every class, so the "
-#             "chart shows the available prediction score only."
-#         )
-#     probabilities = {
-#         str(name).replace("_", " ").title(): float(value) * 100
-#         for name, value in raw_probabilities.items()
-#     }
-
-#     left, right = st.columns([1, 2])
-#     with left:
-#         st.metric("AI prediction", label)
-#         st.metric("Confidence", f"{confidence:.1f}%")
-#     with right:
-#         chart_data = pd.DataFrame(
-#             {"Confidence": probabilities.values()},
-#             index=probabilities.keys(),
-#         )
-#         st.bar_chart(chart_data, horizontal=True, y_label="Class", x_label="Probability (%)")
-
-#     if confidence >= 80:
-#         st.success("The model is highly confident in this result.")
-#     elif confidence >= 60:
-#         st.warning(
-#             "The model has moderate confidence. Use a clear, well-lit image "
-#             "and consider checking another leaf or fruit."
-#         )
-#     else:
-#         st.warning(
-#             "The model is uncertain. Treat this as a screening result, not "
-#             "a final agricultural diagnosis."
-#         )
-
-#     if mode_name == "Banana leaf":
-#         guidance = {
-#             "Healthy": (
-#                 "No strong disease pattern was detected. Continue monitoring "
-#                 "the plant and keep leaves well ventilated."
-#             ),
-#             "Cordana": (
-#                 "Possible Cordana leaf spot. Remove severely affected leaves, "
-#                 "avoid overhead watering, and consult a local expert about "
-#                 "approved treatment."
-#             ),
-#             "Sigatoka": (
-#                 "Possible Sigatoka leaf spot. Inspect nearby leaves, remove "
-#                 "badly affected material, improve airflow, and consult a local "
-#                 "expert about approved fungicide options."
-#             ),
-#         }
-#         st.info(guidance.get(label, "Inspect the plant and consult an expert."))
-#     else:
-#         if label == "Besttoeat":
-#             st.info("The model estimates that this fruit is in the best-to-eat class.")
-#         else:
-#             st.info("The model estimates that this fruit is not in the best-to-eat class.")
-
-# if uploaded_file:
-#     image = Image.open(uploaded_file).convert("RGB")
-#     st.image(image, caption="Uploaded image", use_container_width=True)
-
-#     with tempfile.TemporaryDirectory() as folder:
-#         image_path = Path(folder) / "image.jpg"
-#         image.save(image_path)
-
-#         if mode == "Banana fruit":
-#             result = predict_ripeness(str(image_path), checkpoint=str(RIPENESS_CHECKPOINT))
-#             show_prediction(result, mode)
-
-#         else:
-#             result = predict_leaf_disease(str(image_path), checkpoint_path=str(LEAF_CHECKPOINT))
-#             show_prediction(result, mode)
-
-
 import html
 import importlib.util
+import io
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 import streamlit as st
 import torch
 from PIL import Image
@@ -232,20 +31,18 @@ RIPENESS_CHECKPOINT = PROJECT_DIR / "checkpoints" / "best_vit.pth"
 LEAF_CHECKPOINT = PROJECT_DIR / "checkpoints" / "banana_leaf_disease_vit.pth"
 
 st.set_page_config(
-    page_title="Banana Health & Ripeness Lab",
+    page_title="Banana Leaf Health and Ripeness Tracking",
     page_icon="🍌",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# Palette: deep leaf-shadow ink, banana-peel gold, fresh leaf green, blight rust, warm paper text.
-# Type: Fraunces (display serif) with Instrument Sans (body grotesque).
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,800&family=Instrument+Sans:wght@400;500;600&display=swap');
 
 :root {
-  --ink: #0E2620;
-  --ink-2: #143229;
+  --ink: #08170F;
+  --ink-2: #0F2A1C;
   --leaf: #8DC26F;
   --banana: #F2C230;
   --rust: #D9643A;
@@ -255,11 +52,16 @@ CSS = """
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
-html, body { background: var(--ink); }
+html, body { background: #08170F; }
 
-/* Full-screen canvas: the app fills the entire viewport edge to edge. */
+/* Lab-style background: measurement grid, topographic contours, gold scan line */
 .stApp {
-  background: var(--ink);
+  background-color: #08170F;
+  background-image:
+    linear-gradient(rgba(242, 194, 48, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(242, 194, 48, 0.045) 1px, transparent 1px),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 720 720'%3E%3Cg fill='none' stroke='%23F2C230' stroke-opacity='0.08' stroke-width='1.2'%3E%3Cpath d='M60 360 C120 220 260 180 360 240 S600 300 660 380 S560 560 400 560 S120 520 60 360Z'/%3E%3Cpath d='M120 360 C170 270 280 240 360 285 S540 330 590 390 S520 500 400 500 S160 470 120 360Z'/%3E%3Cpath d='M190 360 C220 310 300 295 360 325 S480 360 520 395 S460 440 390 440 S220 420 190 360Z'/%3E%3Cpath d='M270 365 C290 340 330 335 360 350 S420 375 440 390 S400 400 360 398 S280 390 270 365Z'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 56px 56px, 56px 56px, 720px 720px;
   color: var(--paper);
   font-family: 'Instrument Sans', system-ui, sans-serif;
   overflow-x: hidden;
@@ -271,14 +73,27 @@ html, body { background: var(--ink); }
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(closest-side at 18% 28%, rgba(242, 194, 48, 0.20), transparent 70%),
-    radial-gradient(closest-side at 82% 18%, rgba(141, 194, 111, 0.22), transparent 70%),
-    radial-gradient(closest-side at 62% 88%, rgba(217, 100, 58, 0.16), transparent 70%);
-  animation: aurora 26s ease-in-out infinite alternate;
+    radial-gradient(closest-side at 50% 0%, rgba(60, 170, 130, 0.12), transparent 70%),
+    radial-gradient(closest-side at 14% 18%, rgba(60, 170, 130, 0.10), transparent 70%),
+    radial-gradient(closest-side at 86% 38%, rgba(60, 170, 130, 0.08), transparent 70%);
 }
-@keyframes aurora {
-  from { transform: translate3d(-4%, -2%, 0) rotate(0deg); }
-  to   { transform: translate3d(5%, 3%, 0) rotate(8deg); }
+.stApp::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(242, 194, 48, 0.55), transparent);
+  box-shadow: 0 0 24px 4px rgba(242, 194, 48, 0.18);
+  animation: scan-beam 9s linear infinite;
+}
+@keyframes scan-beam {
+  0% { transform: translateY(0); opacity: 0; }
+  8%, 92% { opacity: 0.8; }
+  100% { transform: translateY(100vh); opacity: 0; }
 }
 
 [data-testid="stHeader"] { display: none; }
@@ -291,35 +106,51 @@ html, body { background: var(--ink); }
   z-index: 1;
 }
 
-/* Hero: fills most of the first screen, with floating spores drifting upward. */
+/* Hero */
 .hero {
   position: relative;
-  min-height: 72vh;
+  min-height: 66vh;
   display: flex;
   align-items: center;
-  padding: 8vh 0 6vh;
+  padding: 8vh 0 5vh;
   overflow: hidden;
 }
 .hero-inner { position: relative; z-index: 1; max-width: 1100px; }
 .hero h1 {
   font-family: 'Fraunces', Georgia, serif;
   font-weight: 800;
-  font-size: clamp(2.6rem, 6vw, 5.8rem);
+  font-size: clamp(2.5rem, 5.6vw, 5.4rem);
   line-height: 1.0;
   letter-spacing: -0.025em;
   margin: 0 0 1.4rem;
-  max-width: 17ch;
+  max-width: 18ch;
   color: var(--paper);
   animation: rise 0.9s var(--ease) both;
 }
 .hero .lede {
   font-size: clamp(1.02rem, 1.4vw, 1.25rem);
   line-height: 1.65;
-  color: var(--mute);
+  color: rgba(244, 235, 214, 0.68);
   max-width: 56ch;
   margin: 0;
   animation: rise 0.9s 0.15s var(--ease) both;
 }
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1.8rem;
+  animation: rise 0.9s 0.25s var(--ease) both;
+}
+.chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.45rem 1rem;
+  font-size: 0.92rem;
+  color: var(--paper);
+  background: rgba(244, 235, 214, 0.04);
+}
+.chip.accent { border-color: var(--leaf); }
 
 .spores { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 .spore {
@@ -342,37 +173,6 @@ html, body { background: var(--ink); }
   100% { transform: translate3d(28px, -110vh, 0); opacity: 0; }
 }
 
-/* Step guide: a clear three-part path through the app. */
-.steps {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.8rem 1.2rem;
-  margin-top: 2.4rem;
-  animation: rise 0.9s 0.3s var(--ease) both;
-}
-.step {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  color: var(--paper);
-  font-size: 1rem;
-  font-weight: 500;
-}
-.step b {
-  display: grid;
-  place-items: center;
-  width: 2.1rem;
-  height: 2.1rem;
-  border-radius: 50%;
-  border: 1px solid var(--banana);
-  color: var(--banana);
-  font-family: 'Fraunces', serif;
-  font-weight: 600;
-  font-size: 1rem;
-}
-.step-sep { width: 2.2rem; height: 1px; background: var(--line); }
-
 .rule {
   height: 1px;
   background: linear-gradient(90deg, var(--banana), transparent 75%);
@@ -381,7 +181,6 @@ html, body { background: var(--ink); }
   transform-origin: left;
   animation: grow-x 1.2s 0.3s var(--ease) both;
 }
-
 @keyframes rise {
   from { opacity: 0; transform: translateY(18px); }
   to   { opacity: 1; transform: none; }
@@ -391,7 +190,7 @@ html, body { background: var(--ink); }
   to   { transform: scaleX(1); }
 }
 
-/* Workspace panels. */
+/* Panels */
 .panel-title {
   font-family: 'Fraunces', serif;
   font-size: 1.5rem;
@@ -399,9 +198,21 @@ html, body { background: var(--ink); }
   margin: 0 0 0.3rem;
   color: var(--paper);
 }
-.panel-sub { color: var(--mute); margin: 0 0 1.4rem; line-height: 1.5; }
+.panel-sub { color: rgba(244, 235, 214, 0.68); margin: 0 0 1.2rem; line-height: 1.5; }
 
-/* Mode switch as large pills. */
+.track-card {
+  margin-top: 0.9rem;
+  padding: 1rem 1.2rem;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(244, 235, 214, 0.04);
+  color: rgba(244, 235, 214, 0.68);
+  line-height: 1.55;
+  font-size: 0.97rem;
+}
+.track-card strong { color: var(--paper); font-family: 'Fraunces', serif; font-weight: 600; font-size: 1.1rem; }
+
+/* Radio as large pills */
 [data-testid="stRadio"] label p {
   font-size: 1.02rem;
   color: var(--paper);
@@ -425,7 +236,16 @@ html, body { background: var(--ink); }
   background: rgba(242, 194, 48, 0.14);
 }
 
-/* Large, inviting upload zone. */
+/* Text and date inputs */
+[data-testid="stTextInput"] input,
+[data-testid="stDateInput"] input {
+  background: rgba(244, 235, 214, 0.05);
+  color: var(--paper);
+  border-color: var(--line);
+  border-radius: 12px;
+}
+
+/* Upload zone */
 [data-testid="stFileUploader"] section {
   background: rgba(244, 235, 214, 0.04);
   border: 1.5px dashed rgba(242, 194, 48, 0.5);
@@ -438,16 +258,15 @@ html, body { background: var(--ink); }
   background: rgba(242, 194, 48, 0.08);
 }
 [data-testid="stFileUploader"] small,
-[data-testid="stFileUploader"] span { color: var(--mute) !important; }
+[data-testid="stFileUploader"] span { color: rgba(244, 235, 214, 0.68) !important; }
 
 [data-testid="stImage"] img {
   border-radius: 18px;
   border: 1px solid var(--line);
 }
 
-/* Photo tips. */
 .tips {
-  margin: 1.2rem 0 0;
+  margin: 1rem 0 0;
   padding: 1.1rem 1.3rem;
   list-style: none;
   border-radius: 16px;
@@ -455,7 +274,7 @@ html, body { background: var(--ink); }
   border: 1px solid var(--line);
   display: grid;
   gap: 0.55rem;
-  color: var(--mute);
+  color: rgba(244, 235, 214, 0.68);
   line-height: 1.5;
   font-size: 0.97rem;
 }
@@ -470,7 +289,7 @@ html, body { background: var(--ink); }
   vertical-align: middle;
 }
 
-/* Empty state: a breathing invitation. */
+/* Empty state */
 .empty {
   border: 1px dashed var(--line);
   border-radius: 24px;
@@ -479,7 +298,7 @@ html, body { background: var(--ink); }
   display: grid;
   place-items: center;
   text-align: center;
-  color: var(--mute);
+  color: rgba(244, 235, 214, 0.68);
   line-height: 1.65;
   animation: breathe 3.6s ease-in-out infinite;
 }
@@ -496,7 +315,7 @@ html, body { background: var(--ink); }
   50%      { border-color: rgba(242, 194, 48, 0.45); }
 }
 
-/* Result readout. */
+/* Result readout */
 .readout {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -532,7 +351,7 @@ html, body { background: var(--ink); }
 @keyframes sweep {
   from { background: conic-gradient(var(--tone) 0%, rgba(244, 235, 214, 0.1) 0); }
 }
-.verdict-kicker { color: var(--mute); font-size: 0.97rem; margin: 0; }
+.verdict-kicker { color: rgba(244, 235, 214, 0.68); font-size: 0.97rem; margin: 0; }
 .verdict h2 {
   font-family: 'Fraunces', serif;
   font-size: clamp(2.2rem, 3.8vw, 3.6rem);
@@ -541,7 +360,7 @@ html, body { background: var(--ink); }
   margin: 0.3rem 0 0.6rem;
   color: var(--paper);
 }
-.verdict p { margin: 0; color: var(--mute); line-height: 1.55; }
+.verdict p { margin: 0; color: rgba(244, 235, 214, 0.68); line-height: 1.55; }
 
 .advice {
   margin-top: 1.8rem;
@@ -560,7 +379,7 @@ html, body { background: var(--ink); }
   gap: 1rem;
   align-items: center;
   font-size: 1rem;
-  color: var(--mute);
+  color: rgba(244, 235, 214, 0.68);
 }
 .bar.is-top { color: var(--paper); font-weight: 600; }
 .bar-track {
@@ -583,13 +402,106 @@ html, body { background: var(--ink); }
   to   { transform: scaleX(1); }
 }
 
-.info-note { color: var(--mute); font-size: 0.95rem; line-height: 1.6; margin-top: 1rem; }
+/* Leaf area affected */
+.sev {
+  margin-top: 1.4rem;
+  padding: 1rem 1.2rem;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(244, 235, 214, 0.04);
+}
+.sev-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.6rem;
+  color: rgba(244, 235, 214, 0.68);
+}
+.sev-head b {
+  font-family: 'Fraunces', serif;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--rust);
+}
+.sev-track {
+  height: 12px;
+  border-radius: 99px;
+  background: rgba(244, 235, 214, 0.08);
+  overflow: hidden;
+}
+.sev-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, rgba(217, 100, 58, 0.5), var(--rust));
+  transform-origin: left;
+  animation: grow 1s var(--ease) both;
+}
+.sev p {
+  margin: 0.7rem 0 0;
+  color: rgba(244, 235, 214, 0.68);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.info-note { color: rgba(244, 235, 214, 0.68); font-size: 0.95rem; line-height: 1.6; margin-top: 1rem; }
+
+/* Tracking log and timeline */
+.section-title {
+  font-family: 'Fraunces', serif;
+  font-size: 1.7rem;
+  font-weight: 600;
+  margin: 4rem 0 0.3rem;
+  color: var(--paper);
+}
+.section-sub { color: rgba(244, 235, 214, 0.68); margin: 0 0 1.4rem; line-height: 1.5; }
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.4rem;
+}
+.stat {
+  padding: 1.1rem 1.2rem;
+  border-radius: 18px;
+  background: rgba(244, 235, 214, 0.04);
+  border: 1px solid var(--line);
+}
+.stat b {
+  display: block;
+  font-family: 'Fraunces', serif;
+  font-size: 2rem;
+  font-weight: 600;
+  color: var(--banana);
+  font-variant-numeric: tabular-nums;
+}
+.stat span { color: rgba(244, 235, 214, 0.68); font-size: 0.92rem; }
+
+.tl-result {
+  margin-top: 1rem;
+  padding: 1rem 1.2rem;
+  border-radius: 16px;
+  border-left: 3px solid var(--leaf);
+  background: rgba(244, 235, 214, 0.05);
+  line-height: 1.6;
+}
+.tl-result b {
+  color: var(--leaf);
+  font-family: 'Fraunces', serif;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+[data-testid="stDataFrame"] {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+}
 
 .foot {
   margin-top: 4rem;
   padding-top: 1.6rem;
   border-top: 1px solid var(--line);
-  color: var(--mute);
+  color: rgba(244, 235, 214, 0.68);
   font-size: 0.9rem;
   line-height: 1.6;
   max-width: 80ch;
@@ -600,6 +512,7 @@ html, body { background: var(--ink); }
   .readout { grid-template-columns: 1fr; justify-items: start; gap: 1.4rem; }
   .bar { grid-template-columns: 6.5rem 1fr 3.6rem; gap: 0.7rem; }
   .empty { min-height: 260px; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -620,12 +533,30 @@ def pretty(name) -> str:
     return str(name).replace("_", " ").title()
 
 
+def normalize_label(name) -> str:
+    return str(name).lower().replace("_", "").replace(" ", "").replace("-", "")
+
+
+TRACKS = {
+    "Banana leaf": {
+        "title": "Leaf Health",
+        "desc": "Detect Cordana or Sigatoka leaf spot, or confirm a healthy leaf.",
+    },
+    "Banana fruit": {
+        "title": "Ripeness Tracking",
+        "desc": "Check whether the fruit is best to eat right now.",
+    },
+}
+
 SUBJECT_PROMPTS = [
     "a photo of a banana leaf",
     "a photo of a banana fruit",
     "a photo of something that is not a banana",
 ]
 
+# Photo quality thresholds: starting values, tune them with your own photos.
+DARK_THRESHOLD = 60
+BLUR_THRESHOLD = 60
 
 @st.cache_resource(show_spinner="Loading the subject check...")
 def load_subject_model():
@@ -633,8 +564,10 @@ def load_subject_model():
     return CLIPModel.from_pretrained(name), CLIPProcessor.from_pretrained(name)
 
 
-def detect_subject(image: Image.Image) -> str:
+@st.cache_data(show_spinner=False)
+def detect_subject(image_bytes: bytes) -> str:
     """Return 'leaf', 'fruit', 'other', or 'unclear' using CLIP zero-shot classification."""
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     model, processor = load_subject_model()
     inputs = processor(text=SUBJECT_PROMPTS, images=image, return_tensors="pt", padding=True)
     with torch.no_grad():
@@ -644,6 +577,55 @@ def detect_subject(image: Image.Image) -> str:
     if score < 0.5:
         return "unclear"
     return ["leaf", "fruit", "other"][best]
+
+
+def photo_issues(image: Image.Image) -> list:
+    """Check brightness and sharpness before running the model."""
+    gray = np.asarray(image.convert("L").resize((512, 512)), dtype=np.float32)
+    issues = []
+    if gray.mean() < DARK_THRESHOLD:
+        issues.append("The photo is quite dark. Use brighter, even light for a more reliable result.")
+    lap = (
+        4 * gray[1:-1, 1:-1]
+        - gray[:-2, 1:-1] - gray[2:, 1:-1]
+        - gray[1:-1, :-2] - gray[1:-1, 2:]
+    )
+    if lap.var() < BLUR_THRESHOLD:
+        issues.append("The photo looks blurry. Hold the camera steady and focus on the leaf or fruit.")
+    return issues
+
+
+@st.cache_data(show_spinner=False)
+def run_model(image_bytes: bytes, mode: str) -> dict:
+    """Run the selected model. Cached, so the same photo is not re-processed on every rerun."""
+    with tempfile.TemporaryDirectory() as folder:
+        image_path = Path(folder) / "image.jpg"
+        Image.open(io.BytesIO(image_bytes)).convert("RGB").save(image_path)
+        if mode == "Banana fruit":
+            return predict_ripeness(str(image_path), checkpoint=str(RIPENESS_CHECKPOINT))
+        return predict_leaf_disease(str(image_path), checkpoint_path=str(LEAF_CHECKPOINT))
+
+
+@st.cache_data(show_spinner=False)
+def leaf_severity(image_bytes: bytes):
+    """
+    Rough estimate of the share of leaf area covered by dark lesions, in percent.
+    Colour-based, so it is approximate. Dark shadows can be counted as lesions.
+    Returns None if the leaf area is too small to measure.
+    """
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((256, 256))
+    hsv = np.asarray(image.convert("HSV"), dtype=np.float32)
+    hue = hsv[..., 0] * 360 / 255
+    sat = hsv[..., 1] / 255
+    val = hsv[..., 2] / 255
+
+    healthy_leaf = (sat > 0.2) & (val > 0.15) & (hue >= 35) & (hue <= 170)
+    lesion = (val < 0.35) & (hue >= 5) & (hue <= 50)
+
+    leaf_total = int((healthy_leaf | lesion).sum())
+    if leaf_total < 2000:
+        return None
+    return float(lesion.sum() / leaf_total * 100)
 
 
 SPORES = [
@@ -682,15 +664,13 @@ def render_hero():
               <div class="spores" aria-hidden="true">{SPORE_HTML}</div>
               <div class="hero-inner">
                 <h1>Edge-Optimized Vision Transformers for Integrated Banana Leaf Health and Banana Ripeness Tracking</h1>
-                <p class="lede">Show the model a banana fruit or a leaf. A compact
-                vision transformer, built to run on edge devices, estimates the
-                class and how sure it is, in a few moments.</p>
-                <div class="steps">
-                  <span class="step"><b>1</b> Choose fruit or leaf</span>
-                  <span class="step-sep"></span>
-                  <span class="step"><b>2</b> Upload a photo</span>
-                  <span class="step-sep"></span>
-                  <span class="step"><b>3</b> Read the result</span>
+                <p class="lede">Check a banana leaf for disease or a banana fruit for ripeness.
+                A compact vision transformer, built for edge devices, gives the result,
+                how confident it is, and logs every scan.</p>
+                <div class="chips">
+                  <span class="chip accent">Leaf Health</span>
+                  <span class="chip">Ripeness Tracking</span>
+                  <span class="chip">Edge-ready</span>
                 </div>
               </div>
             </section>
@@ -719,6 +699,7 @@ def render_empty_state():
 
 
 def render_result(result, mode_name):
+    """Render the result and return the headline and confidence."""
     label_raw = str(result["label"])
     label = pretty(label_raw)
     confidence = float(result["confidence"]) * 100
@@ -759,8 +740,7 @@ def render_result(result, mode_name):
         advice = LEAF_GUIDANCE.get(label, "Inspect the plant and consult an expert.")
     else:
         kicker = "Ripeness result"
-        normalized_label = label_raw.lower().replace("_", "").replace(" ", "").replace("-", "")
-        if normalized_label == "besttoeat":
+        if normalize_label(label_raw) == "besttoeat":
             headline = "Best to eat"
             advice = "The model estimates that this fruit is in the best-to-eat class."
         else:
@@ -797,31 +777,149 @@ def render_result(result, mode_name):
         ),
         unsafe_allow_html=True,
     )
+    return headline, confidence
 
 
+def render_severity(percent):
+    if percent is None:
+        st.markdown(
+            compact(
+                """
+                <div class="sev">
+                  <p>The leaf area could not be measured in this photo. Use a photo
+                  where the whole leaf is visible.</p>
+                </div>
+                """
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+    width = max(0.0, min(100.0, percent))
+    st.markdown(
+        compact(
+            f"""
+            <div class="sev">
+              <div class="sev-head">
+                <span>Estimated leaf area affected</span>
+                <b>{percent:.1f}%</b>
+              </div>
+              <div class="sev-track"><div class="sev-fill" style="width:{width:.1f}%"></div></div>
+              <p>Rough estimate from lesion colour. Treat it as a guide until a
+              segmentation model is trained on labelled leaf masks.</p>
+            </div>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def render_tracking_log():
+    st.markdown(
+        compact(
+            """
+            <h2 class="section-title">Tracking log</h2>
+            <p class="section-sub">Every scan in this session, so you can follow leaf health and ripeness over time.</p>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
+
+    history = st.session_state.history
+    if not history:
+        st.markdown(
+            compact(
+                """
+                <p class="info-note">No scans yet. Your results will be logged here.</p>
+                """
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    df = pd.DataFrame(history)
+    leaf_checks = int((df["Track"] == "Leaf Health").sum())
+    fruit_checks = len(df) - leaf_checks
+    avg_conf = df["Confidence"].mean()
+
+    st.markdown(
+        compact(
+            f"""
+            <div class="stats">
+              <div class="stat"><b>{len(df)}</b><span>Total scans</span></div>
+              <div class="stat"><b>{leaf_checks}</b><span>Leaf checks</span></div>
+              <div class="stat"><b>{fruit_checks}</b><span>Ripeness checks</span></div>
+              <div class="stat"><b>{avg_conf:.1f}%</b><span>Average confidence</span></div>
+            </div>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("**Confidence across scans**")
+    st.line_chart(df["Confidence"], height=220)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    col_csv, col_clear, _ = st.columns([1.3, 1, 3])
+    with col_csv:
+        st.download_button(
+            "Download log as CSV",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name="banana_tracking_log.csv",
+            mime="text/csv",
+        )
+    with col_clear:
+        if st.button("Clear tracking log"):
+            st.session_state.history = []
+            st.session_state.last_logged = None
+            st.session_state.image_uploader_version += 1
+            st.rerun()
+
+
+# Session state
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "last_logged" not in st.session_state:
+    st.session_state.last_logged = None
+if "image_uploader_version" not in st.session_state:
+    st.session_state.image_uploader_version = 0
 render_hero()
 
 left, right = st.columns([1, 1.15], gap="large")
+
+image = None
+image_bytes = None
+detected = "unclear"
 
 with left:
     st.markdown(
         compact(
             """
-            <h2 class="panel-title">Upload a photo</h2>
-            <p class="panel-sub">Pick what you are checking, then add an image.</p>
+            <h2 class="panel-title">Choose a check</h2>
+            <p class="panel-sub">Pick the track, then upload one clear photo.</p>
             """
         ),
         unsafe_allow_html=True,
     )
     mode = st.radio(
-        "What are you uploading?",
-        ["Banana fruit", "Banana leaf"],
+        "Which check do you want to run?",
+        list(TRACKS.keys()),
+        format_func=lambda key: TRACKS[key]["title"],
         horizontal=True,
     )
+    st.markdown(
+        compact(
+            f"""
+            <div class="track-card"><strong>{TRACKS[mode]["title"]}</strong><br>{TRACKS[mode]["desc"]}</div>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
+
     uploaded_file = st.file_uploader(
         "Choose an image",
         type=["jpg", "jpeg", "png"],
         label_visibility="collapsed",
+        key=f"image_uploader_{st.session_state.image_uploader_version}",
     )
 
     st.markdown(
@@ -837,12 +935,11 @@ with left:
         unsafe_allow_html=True,
     )
 
-    image = None
-    detected = "unclear"
     if uploaded_file:
-        image = Image.open(uploaded_file).convert("RGB")
+        image_bytes = uploaded_file.getvalue()
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         st.image(image, caption="Uploaded image", use_container_width=True)
-        detected = detect_subject(image)
+        detected = detect_subject(image_bytes)
 
 with right:
     st.markdown(
@@ -858,38 +955,41 @@ with right:
         render_empty_state()
     elif detected == "other":
         st.warning(
-            "This photo does not look like a banana  leaf. "
-            "Upload a clear photo of one banana leaf."
+            "This photo does not look like a banana leaf or fruit. "
+            "Upload a clear photo of one banana leaf or one banana fruit."
         )
     elif mode == "Banana fruit" and detected == "leaf":
         st.warning(
-            "This photo looks like a banana leaf, but Banana fruit is selected. "
-            "Choose Banana leaf above to get a valid result."
+            "This photo looks like a banana leaf, but Ripeness Tracking is selected. "
+            "Choose Leaf Health above to get a valid result."
         )
     elif mode == "Banana leaf" and detected == "fruit":
         st.warning(
-            "This photo looks like a banana fruit, but Banana leaf is selected. "
-            "Choose Banana fruit above to get a valid result."
+            "This photo looks like a banana fruit, but Leaf Health is selected. "
+            "Choose Ripeness Tracking above to get a valid result."
         )
     else:
+        issues = photo_issues(image)
+        for issue in issues:
+            st.warning(issue)
+
         with st.spinner("Reading the image..."):
-            with tempfile.TemporaryDirectory() as folder:
-                image_path = Path(folder) / "image.jpg"
-                image.save(image_path)
+            result = run_model(image_bytes, mode)
 
-                if mode == "Banana fruit":
-                    result = predict_ripeness(str(image_path), checkpoint=str(RIPENESS_CHECKPOINT))
-                else:
-                    result = predict_leaf_disease(str(image_path), checkpoint_path=str(LEAF_CHECKPOINT))
+        headline, confidence = render_result(result, mode)
 
-        render_result(result, mode)
+        if mode == "Banana leaf":
+            render_severity(leaf_severity(image_bytes))
 
-st.markdown(
-    compact(
-        """
-        <p class="foot">A screening aid for education and field triage. It does
-        not replace a professional agricultural diagnosis.</p>
-        """
-    ),
-    unsafe_allow_html=True,
-)
+        scan_key = f"{uploaded_file.name}-{uploaded_file.size}-{mode}"
+        if st.session_state.last_logged != scan_key:
+            st.session_state.history.append({
+                "Time": datetime.now().strftime("%H:%M:%S"),
+                "Track": TRACKS[mode]["title"],
+                "Result": headline,
+                "Confidence": round(confidence, 1),
+                "Photo": "Check photo" if issues else "Good",
+            })
+            st.session_state.last_logged = scan_key
+
+render_tracking_log()
