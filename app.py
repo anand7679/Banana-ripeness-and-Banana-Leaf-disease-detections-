@@ -926,7 +926,7 @@ with left:
         compact(
             """
             <ul class="tips">
-              <li>Keep one banana or one leaf in the frame.</li>
+              <li>Keep banana or one leaf in the frame.</li>
               <li>Use daylight or bright, even lighting.</li>
               <li>Avoid heavy shadows and blurry photos.</li>
             </ul>
