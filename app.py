@@ -9,6 +9,10 @@ import secrets
 import sqlite3
 import sys
 import tempfile
+import os
+import urllib.parse
+import urllib.request
+import urllib.error
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -39,7 +43,7 @@ ALLOWED_EXTENSIONS = ("jpg", "jpeg", "png")
 ROLE_CUSTOMER = "customer"
 ROLE_ADMIN = "admin"
 SHOW_DEMO_HINTS = False
-ENABLE_SUBJECT_CHECK = True
+ENABLE_SUBJECT_CHECK = False
 PAGE_SIZE = 12
 FMT = "%Y-%m-%d %H:%M:%S"
 DARK_THRESHOLD = 60
@@ -403,26 +407,13 @@ def compact(markup: str) -> str:
 def render_theme_toggle(key: str = "global_theme", label: str = "Dark mode") -> None:
     if "dark_mode" not in st.session_state:
         st.session_state.dark_mode = True
-    selected = st.toggle(label, key=key, value=bool(st.session_state.dark_mode))
+    if key not in st.session_state:
+        st.session_state[key] = bool(st.session_state.dark_mode)
+    selected = st.toggle(label, key=key)
     if selected != bool(st.session_state.dark_mode):
         st.session_state.dark_mode = selected
         st.query_params["theme"] = "dark" if selected else "light"
         st.rerun()
-    components.html(
-        f"""<script>
-        try {{
-          const params = new URLSearchParams(window.location.search);
-          const stored = localStorage.getItem("banalens_theme");
-          if (!params.has("theme") && stored) {{
-            params.set("theme", stored);
-            window.location.search = params.toString();
-          }} else {{
-            localStorage.setItem("banalens_theme", "{'dark' if st.session_state.dark_mode else 'light'}");
-          }}
-        }} catch (e) {{}}
-        </script>""",
-        height=0,
-    )
 
 
 def now_str() -> str:
@@ -658,8 +649,66 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(hash_password(password, stored.split("$", 1)[0]), stored)
 
 
+def supabase_config() -> tuple[str, str] | None:
+    try:
+        url = str(st.secrets["SUPABASE_URL"]).rstrip("/")
+        key = str(st.secrets["SUPABASE_ANON_KEY"])
+        if url and key:
+            return url, key
+    except (KeyError, FileNotFoundError):
+        pass
+    url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    key = os.getenv("SUPABASE_ANON_KEY", "")
+    return (url, key) if url and key else None
+
+
+def mirror_customer_to_supabase(
+    full_name: str,
+    username: str,
+    email: str,
+    password_hash: str,
+    created_at: str,
+) -> tuple[bool, str]:
+    config = supabase_config()
+    if config is None:
+        return False, "Cloud database not configured"
+    url, key = config
+    payload = json.dumps({
+        "username": username,
+        "full_name": full_name,
+        "role": ROLE_CUSTOMER,
+        "pw_hash": password_hash,
+        "email": email,
+        "status": "active",
+        "created_at": created_at,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"{url}/rest/v1/users",
+        data=payload,
+        method="POST",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if 200 <= response.status < 300:
+                return True, "saved"
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        return False, detail[:180]
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return False, str(exc)
+    return False, "Supabase did not confirm the registration"
+
+
 def _connect():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=20)
+    conn.execute("PRAGMA busy_timeout=20000")
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -778,16 +827,56 @@ def register_customer(full_name: str, username: str, email: str, password: str) 
             if str(getattr(row, "email", "")).lower() == email:
                 return False, "This email address is already registered."
 
+    conn = _connect()
     try:
-        execute(
+        conn.execute("BEGIN IMMEDIATE")
+        duplicate = conn.execute(
+            "SELECT username, email FROM users "
+            "WHERE LOWER(username) = ? OR LOWER(email) = ?",
+            (username, email),
+        ).fetchone()
+        if duplicate:
+            if str(duplicate["username"]).lower() == username:
+                conn.rollback()
+                return False, "This username is already registered."
+            conn.rollback()
+            return False, "This email address is already registered."
+        password_hash = hash_password(password)
+        created_at = now_str()
+        cur = conn.execute(
             "INSERT INTO users (username, full_name, role, pw_hash, email, status, created_at) "
             "VALUES (?,?,?,?,?,?,?)",
-            (username, full_name, ROLE_CUSTOMER, hash_password(password), email, "active", now_str()),
+            (username, full_name, ROLE_CUSTOMER, password_hash, email, "active", created_at),
         )
+        conn.commit()
+        user_id = cur.lastrowid
     except sqlite3.IntegrityError:
+        conn.rollback()
         return False, "That username or email is already registered."
-    log_audit(username, "user_registered", "Customer account created")
-    return True, "Account created successfully. You can sign in now."
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return False, f"Database error: {exc}"
+    finally:
+        conn.close()
+
+    _bump()
+    check = fetch_df(
+        "SELECT id, username, email, role, status FROM users WHERE id = ?",
+        (int(user_id),),
+    )
+    if check.empty:
+        return False, "The account could not be verified in the database."
+    cloud_configured = supabase_config() is not None
+    if cloud_configured:
+        cloud_saved, cloud_detail = mirror_customer_to_supabase(
+            full_name, username, email, password_hash, created_at
+        )
+        if not cloud_saved:
+            return False, f"Account was saved locally but cloud sync failed: {cloud_detail}"
+    log_audit(username, "user_registered", f"Customer account created (ID: {int(user_id)})")
+    if cloud_configured:
+        return True, "Account created successfully and saved in the persistent database. You can sign in now."
+    return True, "Account created successfully and saved. You can sign in now."
 
 
 def start_session(user: dict) -> None:
@@ -1142,9 +1231,7 @@ def render_login(role: str) -> None:
             </div>""")
         badge, title = "ADMIN", "Administrator sign in"
         sub = "Restricted to platform administrators. Every attempt is recorded."
-        demo = "admin / Admin@123"
-        default_username = "admin"
-        default_password = "Admin@123"
+        demo = ""
     else:
         left_html = compact(f"""
             <div class="login-left field">
@@ -1164,13 +1251,8 @@ def render_login(role: str) -> None:
             </div>""")
         badge, title = "CUSTOMER", "Welcome back"
         sub = "Sign in to upload a photo and see your results."
-        demo = "customer / Customer@123"
-        default_username = "customer"
-        default_password = "Customer@123"
         registered_username = st.session_state.pop("registration_success_username", "")
         if registered_username:
-            default_username = registered_username
-            default_password = ""
             st.success("Account created successfully. Sign in with your new username and password.")
 
     left, right = st.columns([1.15, 1], gap="large")
@@ -1184,8 +1266,8 @@ def render_login(role: str) -> None:
               <p class="sub">{sub}</p>
             </div>"""), unsafe_allow_html=True)
         with st.form(f"login_{role}"):
-            username = st.text_input("Username", value=default_username)
-            password = st.text_input("Password", value=default_password, type="password")
+            username = st.text_input("Username", value="")
+            password = st.text_input("Password", value="", type="password")
             submitted = st.form_submit_button("Sign in", use_container_width=True)
         if submitted:
             user = authenticate(role, username, password)
@@ -1194,8 +1276,6 @@ def render_login(role: str) -> None:
                 st.session_state.portal = None
                 st.rerun()
             st.error("Invalid username or password.")
-        if SHOW_DEMO_HINTS:
-            st.caption(f"Demo login: {demo}. Set SHOW_DEMO_HINTS to False before sharing the app.")
         if role == ROLE_CUSTOMER:
             if st.button("Create a new account", key=f"register_{role}", use_container_width=True):
                 st.session_state.portal = "register"
@@ -1221,7 +1301,7 @@ def page_analyse() -> None:
         st.markdown(f"<p class='sub' style='margin:0'>{greeting()}, <b>{html.escape(user['full_name'])}</b> · Ready for a new scan</p>",
                     unsafe_allow_html=True)
     with top_r:
-        render_theme_toggle("customer_theme", "Dark mode")
+        st.caption("Use the sidebar to change theme")
 
     scan_count = int(fetch_df("SELECT COUNT(*) AS n FROM scans WHERE user_id = ?", (int(user["id"]),)).iloc[0]["n"])
     avg_conf = fetch_df("SELECT AVG(confidence) AS n FROM scans WHERE user_id = ?", (int(user["id"]),)).iloc[0]["n"]
@@ -1316,12 +1396,12 @@ def render_analysis(uploaded, mode: str, user: dict, version: int) -> None:
     image_bytes, image, original_size = normalize_image(raw)
     scan_key = f"{user['id']}-{uploaded.name}-{uploaded.size}-{mode}"
     issues = photo_issues(image)
-    detected = detect_subject(image_bytes) if ENABLE_SUBJECT_CHECK else "unclear"
+    detected = detect_subject(image_bytes) if ENABLE_SUBJECT_CHECK else None
 
     mismatch = None
     if detected == "other":
         mismatch = "This photo does not look like a banana leaf or fruit. Upload a clear photo of one."
-    elif detected == "unclear":
+    elif ENABLE_SUBJECT_CHECK and detected == "unclear":
         mismatch = "The photo could not be identified clearly. Upload a sharper, brighter photo containing one banana leaf or fruit."
     elif mode == "Banana fruit" and detected == "leaf":
         mismatch = "Wrong scan selected: this image looks like a banana leaf. Choose Leaf Health for this photo."
@@ -1778,6 +1858,26 @@ def page_users() -> None:
     require_role(ROLE_ADMIN)
     admin = st.session_state.user
     st.markdown("<h2 class='section-title'>User management</h2>", unsafe_allow_html=True)
+    registered_total = int(fetch_df(
+        "SELECT COUNT(*) AS n FROM users WHERE role = 'customer'"
+    ).iloc[0]["n"])
+    latest_users = fetch_df(
+        "SELECT username, full_name, email, status, created_at FROM users "
+        "WHERE role = 'customer' ORDER BY id DESC LIMIT 5"
+    )
+    m1, m2 = st.columns(2)
+    m1.metric("Registered customers", registered_total)
+    m2.metric("Database", "Connected")
+    if not latest_users.empty:
+        st.markdown("<p class='sub' style='margin-top:.8rem'>Latest registrations</p>", unsafe_allow_html=True)
+        st.dataframe(
+            latest_users.rename(columns={
+                "username": "Username", "full_name": "Full name", "email": "Email",
+                "status": "Status", "created_at": "Registered",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
     df = fetch_df("""
         SELECT u.id, u.username, u.full_name, u.role, u.status, u.created_at, u.last_active,
           (SELECT COUNT(*) FROM scans s WHERE s.user_id = u.id) AS scans,
