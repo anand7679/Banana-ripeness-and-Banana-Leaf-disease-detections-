@@ -38,7 +38,7 @@ MAX_UPLOAD_MB = 10
 ALLOWED_EXTENSIONS = ("jpg", "jpeg", "png")
 ROLE_CUSTOMER = "customer"
 ROLE_ADMIN = "admin"
-SHOW_DEMO_HINTS = True  # set to False before sharing the app
+SHOW_DEMO_HINTS = False
 ENABLE_SUBJECT_CHECK = True
 PAGE_SIZE = 12
 FMT = "%Y-%m-%d %H:%M:%S"
@@ -332,35 +332,27 @@ div[data-baseweb="popover"], div[data-baseweb="menu"], ul[role="listbox"] { back
 .portal-meta { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:1.1rem; }
 .portal-meta span { color:var(--muted); border:1px solid var(--border); border-radius:999px; padding:.28rem .55rem; font-size:.72rem; }
 .landing-note { text-align:center; color:var(--muted); font-size:.82rem; margin:1.1rem 0 0; }
-.st-key-landing_customer_card_overlay button,
-.st-key-landing_admin_card_overlay button {
-  height:260px; min-height:260px; width:100%; position:relative; overflow:hidden;
-  border-radius:22px; border:1px solid rgba(148,163,184,.13);
-  padding:1.55rem 2.1rem 3.2rem; text-align:left; white-space:pre-line;
-  align-items:flex-start; justify-content:flex-start;
-  background:linear-gradient(145deg,rgba(55,74,118,.68),rgba(24,38,68,.92));
-  color:#F8FAFC; box-shadow:0 18px 40px rgba(2,6,23,.18);
-  backdrop-filter:blur(18px); font-family:'Inter',sans-serif;
-  font-size:.96rem; line-height:1.55;
-  transition:transform .32s var(--ease),border-color .32s var(--ease),box-shadow .32s var(--ease),background .32s var(--ease);
-}
-.st-key-landing_customer_card_overlay button::before,
-.st-key-landing_admin_card_overlay button::before {
-  content:""; position:absolute; width:140px; height:140px; right:-78px; bottom:-88px;
+.landing-portal-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1.1rem; margin:.25rem 0 1rem; }
+.landing-portal-card { position:relative; display:block; height:260px; overflow:hidden; box-sizing:border-box;
+  text-decoration:none; border-radius:22px; border:1px solid rgba(148,163,184,.13);
+  padding:1.55rem 2.1rem 3.2rem; background:linear-gradient(145deg,rgba(55,74,118,.68),rgba(24,38,68,.92));
+  color:#F8FAFC; box-shadow:0 18px 40px rgba(2,6,23,.18); backdrop-filter:blur(18px);
+  transition:transform .32s var(--ease),border-color .32s var(--ease),box-shadow .32s var(--ease),background .32s var(--ease); }
+.landing-portal-card:hover { transform:translateY(-7px); border-color:rgba(250,204,21,.40); text-decoration:none;
+  background:linear-gradient(145deg,rgba(63,84,132,.76),rgba(27,43,78,.96)); box-shadow:0 24px 52px rgba(2,6,23,.30); }
+.landing-portal-card::before { content:""; position:absolute; width:140px; height:140px; right:-78px; bottom:-88px;
   border-radius:50%; border:1px solid rgba(250,204,21,.12);
-  box-shadow:0 0 0 22px rgba(250,204,21,.025),0 0 0 44px rgba(250,204,21,.018);
-}
-.st-key-landing_customer_card_overlay button::after,
-.st-key-landing_admin_card_overlay button::after {
-  content:"→"; position:absolute; right:1.35rem; bottom:1.1rem;
-  color:#FACC15; font-size:1.35rem; line-height:1;
-}
-.st-key-landing_customer_card_overlay button:hover,
-.st-key-landing_admin_card_overlay button:hover {
-  transform:translateY(-7px); border-color:rgba(250,204,21,.40);
-  background:linear-gradient(145deg,rgba(63,84,132,.76),rgba(27,43,78,.96));
-  box-shadow:0 24px 52px rgba(2,6,23,.30);
-}
+  box-shadow:0 0 0 22px rgba(250,204,21,.025),0 0 0 44px rgba(250,204,21,.018); }
+.landing-portal-card::after { content:"→"; position:absolute; right:1.35rem; bottom:1.1rem;
+  color:#FACC15; font-size:1.35rem; line-height:1; }
+.landing-portal-kicker { display:flex; align-items:center; gap:.55rem; margin-bottom:.85rem;
+  color:#F8FAFC; font-size:.82rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+.landing-portal-kicker span { color:#A3E635; font-size:.95rem; }
+.landing-portal-card h2 { margin:0 0 .65rem; color:#F8FAFC; font-size:1.35rem; line-height:1.2; letter-spacing:-.02em; }
+.landing-portal-copy { min-height:3.1rem; max-width:52ch; margin:0 0 .65rem;
+  color:rgba(248,250,252,.78); font-size:.96rem; line-height:1.55; }
+.landing-portal-tags { color:#F8FAFC; font-size:.86rem; }
+@media (max-width:700px) { .landing-portal-grid { grid-template-columns:1fr; } }
 .portal-card-divider {
   width:58px; height:2px; border-radius:999px; margin:.55rem 0 1rem;
   background:linear-gradient(90deg,#FACC15,#22C55E);
@@ -1054,23 +1046,21 @@ def render_landing_fallback() -> None:
           <div class="mini-metric"><span>Detection tracks</span><b>5</b></div>
           <div class="mini-metric"><span>Analysis mode</span><b style="font-size:1.12rem">Edge-ready</b></div>
         </div>"""), unsafe_allow_html=True)
-    col1, col2 = st.columns(2, gap="large")
-    with col1:
-        if st.button(
-            "◉  FIELD USER\n\nScan a plant or fruit\n\nUpload a photo and receive a focused health or ripeness assessment with a private scan history.\n\nLeaf disease · Ripeness · Guidance",
-            key="landing_customer_card_overlay",
-            use_container_width=True,
-        ):
-            st.session_state.portal = ROLE_CUSTOMER
-            st.rerun()
-    with col2:
-        if st.button(
-            "◆  OPERATIONS\n\nManage the platform\n\nReview system health, customer activity, model results, audit events, and operational trends.\n\nAnalytics · Users · Audit trail",
-            key="landing_admin_card_overlay",
-            use_container_width=True,
-        ):
-            st.session_state.portal = ROLE_ADMIN
-            st.rerun()
+    st.markdown(compact(f"""
+        <div class="landing-portal-grid">
+          <a class="landing-portal-card" href="?portal={ROLE_CUSTOMER}" target="_self">
+            <div class="landing-portal-kicker"><span>◉</span> FIELD USER</div>
+            <h2>Scan a plant or fruit</h2>
+            <p class="landing-portal-copy">Upload a photo and receive a focused health or ripeness assessment with a private scan history.</p>
+            <div class="landing-portal-tags">Leaf disease · Ripeness · Guidance</div>
+          </a>
+          <a class="landing-portal-card" href="?portal={ROLE_ADMIN}" target="_self">
+            <div class="landing-portal-kicker"><span>◆</span> OPERATIONS</div>
+            <h2>Manage the platform</h2>
+            <p class="landing-portal-copy">Review system health, customer activity, model results, audit events, and operational trends.</p>
+            <div class="landing-portal-tags">Analytics · Users · Audit trail</div>
+          </a>
+        </div>"""), unsafe_allow_html=True)
     st.markdown("<p class='landing-note'>A screening aid for education and field triage · Not a replacement for professional agricultural diagnosis</p>",
                 unsafe_allow_html=True)
 
@@ -1901,6 +1891,12 @@ enforce_timeout()
 
 user = st.session_state.get("user")
 portal = st.session_state.get("portal")
+if portal is None:
+    link_portal = str(st.query_params.get("portal", "")).strip().lower()
+    if link_portal in (ROLE_CUSTOMER, ROLE_ADMIN):
+        portal = link_portal
+        st.session_state.portal = link_portal
+        st.query_params.pop("portal", None)
 role = user["role"] if user else (portal or ROLE_CUSTOMER)
 if "dark_mode" not in st.session_state:
     theme_param = str(st.query_params.get("theme", "dark")).lower()
