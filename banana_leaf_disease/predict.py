@@ -1,5 +1,6 @@
 # Run inference with the ViT banana leaf disease classifier.
 import argparse
+from functools import lru_cache
 import torch
 from PIL import Image
 from torchvision import transforms
@@ -7,6 +8,28 @@ from .model import CHECKPOINT_PATH, MODEL_NAME, NUM_CLASSES, build_vit
 
 IMG_SIZE = 224
 CLASS_NAMES = ["cordana", "healthy", "sigatoka"]
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+IMAGE_TRANSFORM = transforms.Compose(
+    [
+        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        ),
+    ]
+)
+
+
+@lru_cache(maxsize=4)
+def load_model(checkpoint_path, device):
+    model = build_vit(
+        model_name=MODEL_NAME,
+        num_classes=NUM_CLASSES,
+        pretrained=False,
+    )
+    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    return model.to(device).eval()
 
 
 def predict(
@@ -14,26 +37,10 @@ def predict(
     checkpoint_path=CHECKPOINT_PATH,
     device="cpu",
 ):
-    model = build_vit(
-        model_name=MODEL_NAME,
-        num_classes=NUM_CLASSES,
-        pretrained=False,
-    )
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-    model.to(device).eval()
+    model = load_model(str(checkpoint_path), device)
 
-    transform = transforms.Compose(
-        [
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            ),
-        ]
-    )
-    image = transform(Image.open(image_path).convert("RGB")).unsqueeze(0).to(device)
-    with torch.no_grad():
+    image = IMAGE_TRANSFORM(Image.open(image_path).convert("RGB")).unsqueeze(0).to(device)
+    with torch.inference_mode():
         probabilities = torch.softmax(model(image), dim=1).cpu().numpy()[0]
     index = int(probabilities.argmax())
     return {
@@ -52,7 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", default=CHECKPOINT_PATH)
     parser.add_argument(
         "--device",
-        default="cuda" if torch.cuda.is_available() else "cpu",
+        default=DEVICE,
     )
     args = parser.parse_args()
     print(predict(args.image, args.checkpoint, args.device))

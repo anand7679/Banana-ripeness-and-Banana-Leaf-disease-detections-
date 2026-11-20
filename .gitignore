@@ -8,3 +8,5 @@ Banana_Leaf_Dataset/
 My-Test/
 
 .streamlit/secrets.toml
+banana_app.db
+.vscode/

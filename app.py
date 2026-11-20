@@ -4,6 +4,7 @@ import html
 import importlib.util
 import io
 import json
+import logging
 import math
 import secrets
 import sqlite3
@@ -48,6 +49,9 @@ PAGE_SIZE = 12
 FMT = "%Y-%m-%d %H:%M:%S"
 DARK_THRESHOLD = 60
 BLUR_THRESHOLD = 60
+LOGGER = logging.getLogger("banana_app.auth")
+if not LOGGER.handlers:
+    LOGGER.addHandler(logging.NullHandler())
 DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 SUBJECT_PROMPTS = [
     "a photo of a banana leaf",
@@ -371,49 +375,25 @@ CUSTOMER_HIDE_ADMIN_CSS = """
 """
 
 
-def theme_css(role: str, light: bool) -> str:
-    if role == ROLE_ADMIN:
-        dark = bool(st.session_state.get("dark_mode"))
-        return f":root {{ {THEME_VARS['admin_dark' if dark else 'admin']} }}"
-    if bool(st.session_state.get("dark_mode")):
-        return f":root {{ {THEME_VARS['customer_dark']} }}"
-    return f":root {{ {THEME_VARS['customer_light']} }}"
+def theme_css(role: str) -> str:
+    return f":root {{ {THEME_VARS['admin_dark'] if role == ROLE_ADMIN else THEME_VARS['customer_dark']} }}"
 
 
-def palette(role: str, light: bool) -> dict:
-    if bool(st.session_state.get("dark_mode")):
-        return {"text": "#F8FAFC", "muted": "#94A3B8", "grid": "rgba(148,163,184,.14)",
-                "accent": "#FACC15", "accent2": "#22C55E", "accent3": "#22C55E", "danger": "#FB7185"}
-    if role == ROLE_ADMIN:
-        return {"text": "#1B5E20", "muted": "#4F684E", "grid": "rgba(46,125,50,.12)",
-                "accent": "#FBC02D", "accent2": "#81C784", "accent3": "#2E7D32", "danger": "#A64B3C"}
-    return {"text": "#1B5E20", "muted": "#4F684E", "grid": "rgba(46,125,50,.12)",
-            "accent": "#FBC02D", "accent2": "#81C784", "accent3": "#2E7D32", "danger": "#A64B3C"}
+def palette(role: str) -> dict:
+    return {"text": "#F8FAFC", "muted": "#94A3B8", "grid": "rgba(148,163,184,.14)",
+            "accent": "#FACC15", "accent2": "#22C55E", "accent3": "#22C55E", "danger": "#FB7185"}
 
 
 def current_palette() -> dict:
     user = st.session_state.get("user")
     role = user["role"] if user else ROLE_CUSTOMER
-    light = bool(st.session_state.get("light_mode")) and role == ROLE_CUSTOMER
-    return palette(role, light)
+    return palette(role)
 
 
 # ---------- Utilities ----------
 
 def compact(markup: str) -> str:
     return " ".join(line.strip() for line in markup.splitlines() if line.strip())
-
-
-def render_theme_toggle(key: str = "global_theme", label: str = "Dark mode") -> None:
-    if "dark_mode" not in st.session_state:
-        st.session_state.dark_mode = True
-    if key not in st.session_state:
-        st.session_state[key] = bool(st.session_state.dark_mode)
-    selected = st.toggle(label, key=key)
-    if selected != bool(st.session_state.dark_mode):
-        st.session_state.dark_mode = selected
-        st.query_params["theme"] = "dark" if selected else "light"
-        st.rerun()
 
 
 def now_str() -> str:
@@ -589,14 +569,8 @@ document.querySelectorAll('.kv').forEach((el,i)=>{
 
 def kpi_counters(items, height: int = 260) -> None:
     pal = current_palette()
-    admin = st.session_state.get("user", {}).get("role") == ROLE_ADMIN
-    dark = bool(st.session_state.get("dark_mode"))
-    if dark:
-        surface = "rgba(30,41,59,.92)"
-        border = "rgba(148,163,184,.16)"
-    else:
-        surface = "rgba(255,255,255,.86)" if admin else "rgba(255,255,255,.88)"
-        border = "rgba(46,125,50,.16)" if admin else "rgba(46,125,50,.14)"
+    surface = "rgba(30,41,59,.92)"
+    border = "rgba(148,163,184,.16)"
     cards = "".join(
         f'<div class="k"><div class="kl">{html.escape(label)}</div>'
         f'<div class="kv" data-v="{int(value)}">0</div>'
@@ -646,7 +620,19 @@ def hash_password(password: str, salt: str | None = None) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
-    return hmac.compare_digest(hash_password(password, stored.split("$", 1)[0]), stored)
+    if not isinstance(stored, str) or "$" not in stored:
+        LOGGER.warning("Authentication record has an invalid password hash")
+        return False
+    salt, digest = stored.split("$", 1)
+    if not salt or len(digest) != 64:
+        LOGGER.warning("Authentication record has a malformed password hash")
+        return False
+    try:
+        candidate = hash_password(password, salt)
+    except (TypeError, ValueError) as exc:
+        LOGGER.warning("Password verification failed safely: %s", exc)
+        return False
+    return hmac.compare_digest(candidate, stored)
 
 
 def supabase_config() -> tuple[str, str] | None:
@@ -705,6 +691,98 @@ def mirror_customer_to_supabase(
     return False, "Supabase did not confirm the registration"
 
 
+def sync_users_from_supabase() -> tuple[bool, str]:
+    """Merge Supabase users into the local cache used by this Streamlit app."""
+    config = supabase_config()
+    if config is None:
+        return False, "Cloud database not configured"
+
+    url, key = config
+    request = urllib.request.Request(
+        f"{url}/rest/v1/users?select=id,username,full_name,role,pw_hash,email,status,created_at,last_active",
+        method="GET",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if not (200 <= response.status < 300):
+                return False, f"Supabase returned HTTP {response.status}"
+            users = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        return False, detail[:180]
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return False, str(exc)
+
+    conn = _connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for user in users:
+            username = str(user.get("username") or "").strip().lower()
+            if not username:
+                continue
+            existing = conn.execute(
+                "SELECT id FROM users WHERE LOWER(username) = ?",
+                (username,),
+            ).fetchone()
+            if existing:
+                cloud_hash = str(user.get("pw_hash") or "")
+                local_hash = conn.execute(
+                    "SELECT pw_hash FROM users WHERE id = ?",
+                    (int(existing["id"]),),
+                ).fetchone()["pw_hash"]
+                # Never replace a valid local credential with an empty or malformed cloud value.
+                if "$" not in cloud_hash and "$" in str(local_hash):
+                    cloud_hash = str(local_hash)
+                conn.execute(
+                    "UPDATE users SET full_name=?, role=?, pw_hash=?, email=?, status=?, "
+                    "created_at=?, last_active=? WHERE id=?",
+                    (
+                        str(user.get("full_name") or username),
+                        str(user.get("role") or ROLE_CUSTOMER),
+                        cloud_hash,
+                        str(user.get("email") or "") or None,
+                        str(user.get("status") or "active"),
+                        str(user.get("created_at") or now_str()),
+                        user.get("last_active"),
+                        int(existing["id"]),
+                    ),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO users "
+                    "(username, full_name, role, pw_hash, email, status, created_at, last_active) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        username,
+                        str(user.get("full_name") or username),
+                        str(user.get("role") or ROLE_CUSTOMER),
+                        str(user.get("pw_hash") or ""),
+                        str(user.get("email") or "") or None,
+                        str(user.get("status") or "active"),
+                        str(user.get("created_at") or now_str()),
+                        user.get("last_active"),
+                    ),
+                )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return False, f"Database sync failed: {exc}"
+    finally:
+        conn.close()
+
+    _bump()
+    return True, f"Synced {len(users)} users"
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def sync_users_from_supabase_cached() -> tuple[bool, str]:
+    return sync_users_from_supabase()
+
+
 def _connect():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=20)
     conn.execute("PRAGMA busy_timeout=20000")
@@ -746,6 +824,10 @@ def execute(sql: str, params: tuple = ()) -> int:
         cur = conn.execute(sql, params)
         conn.commit()
         new_id = cur.lastrowid
+    except sqlite3.Error as exc:
+        conn.rollback()
+        LOGGER.error("SQLite write failed: %s | SQL=%s", exc, sql)
+        raise
     finally:
         conn.close()
     _bump()
@@ -761,6 +843,7 @@ def setup_database() -> bool:
         if "email" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username))")
         cols = [row[1] for row in conn.execute("PRAGMA table_info(scans)").fetchall()]
         if "details" not in cols:
             conn.execute("ALTER TABLE scans ADD COLUMN details TEXT")
@@ -774,9 +857,16 @@ def setup_database() -> bool:
                     "INSERT INTO users (username, full_name, role, pw_hash, created_at) VALUES (?,?,?,?,?)",
                     (username, full_name, role, hash_password(password), now_str()),
                 )
-            conn.commit()
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        LOGGER.error("Database setup failed: %s", exc)
+        return False
     finally:
         conn.close()
+
+    if supabase_config() is not None:
+        sync_users_from_supabase()
     return True
 
 
@@ -788,14 +878,41 @@ def log_audit(username, action: str, detail: str = "") -> None:
 # ---------- Authentication and sessions ----------
 
 def authenticate(role: str, username: str, password: str):
-    df = fetch_df("SELECT * FROM users WHERE username = ?", (username.strip(),))
-    ok = False
-    if not df.empty:
-        row = df.iloc[0]
-        ok = (verify_password(password, row["pw_hash"]) and row["role"] == role and row["status"] == "active")
-    if not ok:
-        log_audit(username, "login_failed", role)
+    normalized_username = username.strip().lower()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT id, username, full_name, role, status, pw_hash "
+            "FROM users WHERE LOWER(username) = ?",
+            (normalized_username,),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        LOGGER.error("Authentication lookup failed for %r: %s", normalized_username, exc)
+        conn.close()
+        log_audit(username.strip(), "login_failed", f"{role}; database lookup error")
         return None
+    finally:
+        conn.close()
+
+    if row is None:
+        LOGGER.info("Login failed: unknown username %r", normalized_username)
+        log_audit(normalized_username, "login_failed", f"{role}; unknown username")
+        return None
+    if row["role"] != role:
+        LOGGER.info("Login failed: role mismatch for %r", normalized_username)
+        log_audit(normalized_username, "login_failed", f"{role}; role mismatch")
+        return None
+    if row["status"] != "active":
+        LOGGER.info("Login failed: inactive account %r", normalized_username)
+        log_audit(normalized_username, "login_failed", f"{role}; account inactive")
+        return None
+    if not verify_password(password, row["pw_hash"]):
+        LOGGER.info("Login failed: password mismatch for %r", normalized_username)
+        log_audit(normalized_username, "login_failed", f"{role}; password mismatch")
+        return None
+
+    log_audit(normalized_username, "login_attempt_verified", f"{role}; credential record found")
+    return {k: row[k] for k in ("id", "username", "full_name", "role", "status")}
     return {k: row[k] for k in ("id", "username", "full_name", "role", "status")}
 
 
@@ -815,6 +932,12 @@ def register_customer(full_name: str, username: str, email: str, password: str) 
         return False, "Password must be at least 8 characters."
     if not any(char.isupper() for char in password) or not any(char.isdigit() for char in password):
         return False, "Password must include at least one uppercase letter and one number."
+
+    cloud_configured = supabase_config() is not None
+    if cloud_configured:
+        sync_ok, sync_detail = sync_users_from_supabase()
+        if not sync_ok:
+            return False, f"Cannot connect to the persistent database: {sync_detail}"
 
     existing = fetch_df(
         "SELECT username, email FROM users WHERE LOWER(username) = ? OR LOWER(email) = ?",
@@ -860,11 +983,19 @@ def register_customer(full_name: str, username: str, email: str, password: str) 
         conn.close()
 
     _bump()
-    check = fetch_df(
-        "SELECT id, username, email, role, status FROM users WHERE id = ?",
-        (int(user_id),),
-    )
-    if check.empty:
+    conn = _connect()
+    try:
+        check = conn.execute(
+            "SELECT id, username, email, role, status FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        LOGGER.error("Post-registration verification failed for %r: %s", username, exc)
+        return False, f"The account could not be verified: {exc}"
+    finally:
+        conn.close()
+    if check is None:
+        LOGGER.error("Post-registration verification found no row for %r (ID %s)", username, user_id)
         return False, "The account could not be verified in the database."
     cloud_configured = supabase_config() is not None
     if cloud_configured:
@@ -895,8 +1026,10 @@ def end_session(status: str) -> None:
     user = st.session_state.get("user")
     if not user:
         return
-    execute("UPDATE sessions SET logout_at = ?, status = ? WHERE id = ?",
-            (now_str(), status, st.session_state.session_id))
+    session_id = st.session_state.get("session_id")
+    if session_id is not None:
+        execute("UPDATE sessions SET logout_at = ?, status = ? WHERE id = ?",
+                (now_str(), status, int(session_id)))
     execute("UPDATE users SET last_active = ? WHERE id = ?", (now_str(), int(user["id"])))
     log_audit(user["username"], "logout" if status == "Logged out" else "timeout", status)
     for key in ("user", "session_id", "last_active", "last_scan"):
@@ -1155,7 +1288,6 @@ def render_landing_fallback() -> None:
 
 
 def render_landing() -> None:
-    render_theme_toggle("landing_theme")
     landing_html = load_landing_page()
     if landing_html:
         components.html(landing_html, height=LANDING_HEIGHT, scrolling=True)
@@ -1164,7 +1296,6 @@ def render_landing() -> None:
 
 
 def render_registration() -> None:
-    render_theme_toggle("registration_theme")
     left, right = st.columns([1.15, 1], gap="large")
     with left:
         st.markdown(compact("""
@@ -1213,7 +1344,6 @@ def render_registration() -> None:
 
 
 def render_login(role: str) -> None:
-    render_theme_toggle("login_theme")
     if st.session_state.pop("flash", None):
         st.info(st.session_state.get("flash_text") or "Your session timed out. Please sign in again.")
     if role == ROLE_ADMIN:
@@ -1301,7 +1431,7 @@ def page_analyse() -> None:
         st.markdown(f"<p class='sub' style='margin:0'>{greeting()}, <b>{html.escape(user['full_name'])}</b> · Ready for a new scan</p>",
                     unsafe_allow_html=True)
     with top_r:
-        st.caption("Use the sidebar to change theme")
+        st.caption("Dark mode enabled")
 
     scan_count = int(fetch_df("SELECT COUNT(*) AS n FROM scans WHERE user_id = ?", (int(user["id"]),)).iloc[0]["n"])
     avg_conf = fetch_df("SELECT AVG(confidence) AS n FROM scans WHERE user_id = ?", (int(user["id"]),)).iloc[0]["n"]
@@ -1987,6 +2117,8 @@ ADMIN_PAGES = [
 # ---------- Entry point ----------
 
 setup_database()
+if supabase_config() is not None:
+    sync_users_from_supabase_cached()
 enforce_timeout()
 
 user = st.session_state.get("user")
@@ -1998,11 +2130,8 @@ if portal is None:
         st.session_state.portal = link_portal
         st.query_params.pop("portal", None)
 role = user["role"] if user else (portal or ROLE_CUSTOMER)
-if "dark_mode" not in st.session_state:
-    theme_param = str(st.query_params.get("theme", "dark")).lower()
-    st.session_state.dark_mode = theme_param != "light"
-light = bool(st.session_state.get("light_mode")) and role == ROLE_CUSTOMER
-st.markdown(f"<style>{BASE_CSS}{theme_css(role, light)}</style>", unsafe_allow_html=True)
+st.session_state.dark_mode = True
+st.markdown(f"<style>{BASE_CSS}{theme_css(role)}</style>", unsafe_allow_html=True)
 
 if user is None:
     if portal is None:
@@ -2022,7 +2151,6 @@ with st.sidebar:
         <span class="admin-badge">{'ADMIN' if user['role'] == ROLE_ADMIN else 'CUSTOMER'}</span>
         <p class="admin-brand">Banana Platform</p>"""), unsafe_allow_html=True)
     st.caption(f"Signed in as {user['full_name']}")
-    render_theme_toggle("sidebar_theme", "Dark mode")
     if st.button("Sign out", key="sign_out", type="secondary"):
         end_session("Logged out")
         st.rerun()
