@@ -5,3 +5,4 @@ numpy
 pandas
 Pillow
 streamlit>=1.57
+transformers

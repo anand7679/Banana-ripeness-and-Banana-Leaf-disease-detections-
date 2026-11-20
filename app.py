@@ -44,19 +44,21 @@ ALLOWED_EXTENSIONS = ("jpg", "jpeg", "png")
 ROLE_CUSTOMER = "customer"
 ROLE_ADMIN = "admin"
 SHOW_DEMO_HINTS = False
-ENABLE_SUBJECT_CHECK = False
+ENABLE_SUBJECT_CHECK = True
 PAGE_SIZE = 12
 FMT = "%Y-%m-%d %H:%M:%S"
 DARK_THRESHOLD = 60
 BLUR_THRESHOLD = 60
+CATEGORY_CONFIDENCE_THRESHOLD = 0.58
+DISEASE_CONFIDENCE_THRESHOLD = 60.0
 LOGGER = logging.getLogger("banana_app.auth")
 if not LOGGER.handlers:
     LOGGER.addHandler(logging.NullHandler())
 DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 SUBJECT_PROMPTS = [
-    "a photo of a banana leaf",
-    "a photo of a banana fruit",
-    "a photo of something that is not a banana",
+    "a clear close-up photograph of a banana leaf",
+    "a clear close-up photograph of a banana fruit",
+    "a photograph that is not a banana leaf or banana fruit",
 ]
 TRACKS = {
     "Banana leaf": {"title": "Leaf Health", "desc": "Detect Cordana or Sigatoka leaf spot, or confirm a healthy leaf."},
@@ -1065,8 +1067,12 @@ def get_predictors():
 @st.cache_resource(show_spinner="Loading the subject check...")
 def get_clip():
     from transformers import CLIPModel, CLIPProcessor
+    import torch
     name = "openai/clip-vit-base-patch32"
-    return CLIPModel.from_pretrained(name).eval(), CLIPProcessor.from_pretrained(name)
+    model = CLIPModel.from_pretrained(name)
+    if torch.cuda.is_available():
+        model = model.cuda()
+    return model.eval(), CLIPProcessor.from_pretrained(name)
 
 
 def normalize_image(raw: bytes):
@@ -1080,17 +1086,21 @@ def normalize_image(raw: bytes):
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
-def detect_subject(image_bytes: bytes) -> str:
+def detect_subject(image_bytes: bytes) -> dict:
     import torch
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     model, processor = get_clip()
     inputs = processor(text=SUBJECT_PROMPTS, images=image, return_tensors="pt", padding=True)
-    with torch.no_grad():
+    if torch.cuda.is_available():
+        inputs = {name: value.to("cuda") for name, value in inputs.items()}
+    with torch.inference_mode():
         probs = model(**inputs).logits_per_image.softmax(dim=1)[0]
     best = int(probs.argmax())
-    if float(probs[best]) < 0.5:
-        return "unclear"
-    return ["leaf", "fruit", "other"][best]
+    confidence = float(probs[best].float().cpu())
+    category = ["leaf", "fruit", "other"][best]
+    if confidence < CATEGORY_CONFIDENCE_THRESHOLD:
+        category = "unclear"
+    return {"category": category, "confidence": confidence}
 
 
 def photo_issues(image: Image.Image) -> list:
@@ -1104,15 +1114,58 @@ def photo_issues(image: Image.Image) -> list:
     return issues
 
 
+def validate_category_for_mode(detection: dict, mode: str) -> dict:
+    category = detection.get("category", "unclear")
+    confidence = float(detection.get("confidence", 0.0))
+    if category == "unclear":
+        message = ("The uploaded image could not be identified with enough confidence."
+                   " Please upload a clear banana leaf or banana fruit image.")
+        if mode == "Banana leaf":
+            message = "Invalid Image. Please upload a Banana Leaf image for Leaf Disease Prediction."
+        elif mode == "Banana fruit":
+            message = "Invalid Image. Please upload a Banana Fruit image for Fruit Disease Prediction."
+        return {"valid": False, "category": category, "confidence": confidence, "message": message}
+    if category == "other":
+        message = "Invalid Image. Please upload a Banana Leaf or Banana Fruit image."
+        if mode == "Banana leaf":
+            message = "Invalid Image. Please upload a Banana Leaf image for Leaf Disease Prediction."
+        elif mode == "Banana fruit":
+            message = "Invalid Image. Please upload a Banana Fruit image for Fruit Disease Prediction."
+        return {"valid": False, "category": category, "confidence": confidence, "message": message}
+    expected = "leaf" if mode == "Banana leaf" else "fruit"
+    if category != expected:
+        if mode == "Banana leaf":
+            message = "Invalid Image. Please upload a Banana Leaf image for Leaf Disease Prediction."
+        else:
+            message = "Invalid Image. Please upload a Banana Fruit image for Fruit Disease Prediction."
+        return {"valid": False, "category": category, "confidence": confidence, "message": message}
+    return {"valid": True, "category": category, "confidence": confidence, "message": ""}
+
+
 @st.cache_data(show_spinner=False, max_entries=256)
 def run_model(image_bytes: bytes, mode: str) -> dict:
+    category_check = validate_category_for_mode(detect_subject(image_bytes), mode)
+    if not category_check["valid"]:
+        return {
+            "error": category_check["message"],
+            "category_validation": category_check,
+        }
     predict_ripeness, predict_leaf = get_predictors()
     with tempfile.TemporaryDirectory() as folder:
         image_path = Path(folder) / "image.jpg"
         image_path.write_bytes(image_bytes)
         if mode == "Banana fruit":
-            return predict_ripeness(str(image_path), checkpoint=str(RIPENESS_CHECKPOINT))
-        return predict_leaf(str(image_path), checkpoint_path=str(LEAF_CHECKPOINT))
+            result = predict_ripeness(str(image_path), checkpoint=str(RIPENESS_CHECKPOINT))
+        else:
+            result = predict_leaf(str(image_path), checkpoint_path=str(LEAF_CHECKPOINT))
+        confidence_pct = float(result["confidence"]) * 100.0
+        if confidence_pct < DISEASE_CONFIDENCE_THRESHOLD:
+            return {
+                "error": "The prediction confidence is too low. Please upload a clearer, focused banana image.",
+                "low_confidence": True,
+                "confidence": float(result["confidence"]),
+            }
+        return result
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
@@ -1140,10 +1193,19 @@ def risk_level(track: str, label: str, confidence_pct: float) -> str:
 def validate_upload(uploaded):
     if uploaded is None:
         return None
-    if uploaded.name.rsplit(".", 1)[-1].lower() not in ALLOWED_EXTENSIONS:
-        return "Only JPG and PNG images are supported."
+    extension = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
+    if extension not in ALLOWED_EXTENSIONS:
+        return "Only JPG, JPEG, and PNG images are supported."
     if uploaded.size > MAX_UPLOAD_MB * 1024 * 1024:
         return f"Images must be under {MAX_UPLOAD_MB} MB."
+    try:
+        with Image.open(io.BytesIO(uploaded.getvalue())) as image:
+            image.verify()
+            detected_format = str(image.format or "").upper()
+        if detected_format not in ("JPEG", "PNG"):
+            return "Only JPG, JPEG, and PNG images are supported."
+    except (OSError, ValueError):
+        return "The uploaded file is not a valid JPG, JPEG, or PNG image."
     return None
 
 
@@ -1511,6 +1573,13 @@ def page_analyse() -> None:
         st.markdown("".join(cards), unsafe_allow_html=True)
 
 
+@st.dialog("Invalid Image", width="small")
+def show_invalid_image_dialog(message: str) -> None:
+    st.error(message)
+    if st.button("Upload another image", use_container_width=True):
+        st.rerun()
+
+
 def render_analysis(uploaded, mode: str, user: dict, version: int) -> None:
     placeholder = st.empty()
     placeholder.markdown(compact(f"""
@@ -1526,25 +1595,21 @@ def render_analysis(uploaded, mode: str, user: dict, version: int) -> None:
     image_bytes, image, original_size = normalize_image(raw)
     scan_key = f"{user['id']}-{uploaded.name}-{uploaded.size}-{mode}"
     issues = photo_issues(image)
-    detected = detect_subject(image_bytes) if ENABLE_SUBJECT_CHECK else None
-
-    mismatch = None
-    if detected == "other":
-        mismatch = "This photo does not look like a banana leaf or fruit. Upload a clear photo of one."
-    elif ENABLE_SUBJECT_CHECK and detected == "unclear":
-        mismatch = "The photo could not be identified clearly. Upload a sharper, brighter photo containing one banana leaf or fruit."
-    elif mode == "Banana fruit" and detected == "leaf":
-        mismatch = "Wrong scan selected: this image looks like a banana leaf. Choose Leaf Health for this photo."
-    elif mode == "Banana leaf" and detected == "fruit":
-        mismatch = "Wrong scan selected: this image looks like a banana fruit. Choose Fruit Ripeness for this photo."
-    if mismatch:
+    detection = detect_subject(image_bytes) if ENABLE_SUBJECT_CHECK else {
+        "category": "leaf" if mode == "Banana leaf" else "fruit",
+        "confidence": 1.0,
+    }
+    category_check = validate_category_for_mode(detection, mode)
+    if not category_check["valid"]:
         placeholder.empty()
-        st.error(mismatch)
-        st.caption("Tip: Select the correct radio option above, then upload the image again.")
+        show_invalid_image_dialog(category_check["message"])
         return
 
     result = run_model(image_bytes, mode)
     placeholder.empty()
+    if result.get("error"):
+        show_invalid_image_dialog(result["error"])
+        return
 
     width_px, height_px = original_size
     st.markdown(compact(f"""
