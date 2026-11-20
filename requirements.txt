@@ -3,10 +3,5 @@ torchvision
 timm
 numpy
 pandas
-scikit-learn
-matplotlib
-opencv-python
-albumentations
-tensorboard
-streamlit
-transformers
+Pillow
+streamlit>=1.57
